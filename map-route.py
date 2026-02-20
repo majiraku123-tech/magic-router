@@ -8,22 +8,21 @@ import math
 from datetime import datetime, timedelta, date
 
 # ==========================================
-# 1. 膨大な施設データベース (全エリア網羅・30施設以上)
+# 1. 施設データベース (最新化)
 # ==========================================
 AREA_INFO = {
-    "ENT": {"name": "エントランス", "color": "#ffffff"},
+    "ENT": {"name": "エントランス", "color": "#AAAAAA"},
     "MH": {"name": "メディテレーニアンハーバー", "color": "#06d6a0"},
     "AW": {"name": "アメリカンウォーターフロント", "color": "#ef476f"},
     "MI": {"name": "ミステリアスアイランド", "color": "#118ab2"},
     "LR": {"name": "ロストリバーデルタ", "color": "#073b4c"},
-    "PD": {"name": "ポートディスカバリー", "color": "#118ab2"},
+    "PD": {"name": "ポートディスカバリー", "color": "#00b4d8"},
     "AC": {"name": "アラビアンコースト", "color": "#ffd166"},
     "ML": {"name": "マーメイドラグーン", "color": "#ee6c4d"},
     "FS": {"name": "ファンタジースプリングス", "color": "#b5179e"},
 }
 
-# 座標(pos)はパークマップを模した相対座標。durは所要時間(分)。
-# FSエリアはスタンバイ不可（dpaまたはsp必須）として扱う
+# FSは「DPA」または「通常待ち」のみに変更。SPは廃止。
 MASTER_DB = {
     "ソアリン：ファンタスティック・フライト": {"area": "MH", "pos": (12, 12), "dur": 20, "type": "Ride", "indoor": True, "dpa": True},
     "ヴェネツィアン・ゴンドラ": {"area": "MH", "pos": (5, 6), "dur": 15, "type": "Ride", "indoor": False, "dpa": False},
@@ -54,14 +53,13 @@ MASTER_DB = {
     "ブローフィッシュ・バルーンレース": {"area": "ML", "pos": (36, 60), "dur": 5, "type": "Ride", "indoor": True, "dpa": False},
     "ワールプール": {"area": "ML", "pos": (38, 62), "dur": 5, "type": "Ride", "indoor": True, "dpa": False},
     "アリエルのプレイグラウンド": {"area": "ML", "pos": (34, 65), "dur": 20, "type": "Walk", "indoor": True, "dpa": False},
-    "アナとエルサのフローズンジャーニー": {"area": "FS", "pos": (52, 98), "dur": 20, "type": "Ride", "indoor": True, "dpa": True},
-    "ラプンツェルのランタンフェスティバル": {"area": "FS", "pos": (56, 92), "dur": 10, "type": "Ride", "indoor": False, "dpa": True},
-    "ピーターパンのネバーランドアドベンチャー": {"area": "FS", "pos": (62, 105), "dur": 20, "type": "Ride", "indoor": True, "dpa": True},
-    "フェアリー・ティンカーベルのビジーバギー": {"area": "FS", "pos": (60, 100), "dur": 10, "type": "Ride", "indoor": False, "dpa": False}, # SP専用
+    "アナとエルサのフローズンジャーニー": {"area": "FS", "pos": (52, 120), "dur": 20, "type": "Ride", "indoor": True, "dpa": True},
+    "ラプンツェルのランタンフェスティバル": {"area": "FS", "pos": (56, 122), "dur": 10, "type": "Ride", "indoor": False, "dpa": True},
+    "ピーターパンのネバーランドアドベンチャー": {"area": "FS", "pos": (62, 125), "dur": 20, "type": "Ride", "indoor": True, "dpa": True},
+    "フェアリー・ティンカーベルのビジーバギー": {"area": "FS", "pos": (60, 121), "dur": 10, "type": "Ride", "indoor": False, "dpa": False}, 
 }
 
-# 門限 (22:00 = 0:00から起算して1320分)
-PARK_CLOSING_MINUTES = 22 * 60
+PARK_CLOSING_MINUTES = 22 * 60  # 22時門限 (1320分)
 
 # ==========================================
 # 2. 環境シミュレーション・エンジン
@@ -70,22 +68,16 @@ class EnvironmentAI:
     def __init__(self, selected_date, rain_prob, is_extra_holiday):
         self.selected_date = selected_date
         self.rain_prob = rain_prob
-        # 土日か、ユーザーが指定した特別混雑日なら係数を上げる
         self.is_crowded = selected_date.weekday() >= 5 or is_extra_holiday
 
     def get_wait_curve(self, attr_name, current_min):
         attr = MASTER_DB[attr_name]
+        # FSエリアは「通常待ち」も可能という想定（マジックパス相当や解放時を考慮）
+        # DPAでなければ長めの待ち時間を設定
+        base = 100 if attr['area'] == "FS" else (80 if attr.get('dpa') else 30)
         
-        # FSエリアの厳密処理: 通常スタンバイは存在しない
-        if attr['area'] == "FS":
-            return 999  # DPAかSPを持たない場合、物理的に並べないためペナルティ値
-            
-        base = 80 if attr['dpa'] else 30
-        
-        # 混雑ピークのモデリング (昼〜夕方にピーク)
-        # 1日のうち、開園(約500分)〜22時(1320分)の間で山なりを作る
+        # 開園〜22時での山なり混雑ピーク
         time_factor = np.sin(np.pi * max(0, (current_min - 480)) / 840)
-        
         weather_mod = 1.3 if self.rain_prob > 50 and attr['indoor'] else 0.7 if self.rain_prob > 50 else 1.0
         crowd_mod = 1.5 if self.is_crowded else 1.0
         
@@ -93,13 +85,13 @@ class EnvironmentAI:
         return max(5, wait)
 
 # ==========================================
-# 3. 最適化エンジン (数学的厳密モデル)
+# 3. 最適化エンジン (厳格な時間管理・距離モデル)
 # ==========================================
 class OptimizationCore:
     def __init__(self, env):
         self.env = env
 
-    def calc_route_cost(self, route, start_time, dpa_list, fs_passes, auto_rest):
+    def calc_route_cost(self, route, start_time, dpa_list, auto_rest):
         current_t = start_time
         current_pos = (0, 0)
         current_area = "ENT"
@@ -110,80 +102,82 @@ class OptimizationCore:
         for name in route:
             attr = MASTER_DB[name]
             
-            # 1. 移動コスト計算 (エリアまたぎのペナルティ係数 1.5倍)
-            dist = math.sqrt((current_pos[0]-attr['pos'][0])**2 + (current_pos[1]-attr['pos'][1])**2)
-            time_cost = dist * 0.8  # 基本移動係数
+            # 1. 距離計算（FSモデルの適正化）
+            if current_area == "FS" and attr['area'] == "FS":
+                time_cost = random.randint(3, 5) # FSエリア内移動は一瞬
+            elif current_area == "ENT" and attr['area'] == "FS":
+                time_cost = 25 # エントランスからFSは非常に遠い
+            elif (current_area != "FS" and attr['area'] == "FS") or (current_area == "FS" and attr['area'] != "FS"):
+                time_cost = 20 # 他エリアとの行き来も遠い
+            else:
+                dist = math.sqrt((current_pos[0]-attr['pos'][0])**2 + (current_pos[1]-attr['pos'][1])**2)
+                time_cost = dist * 0.8
+                if current_area != "ENT" and current_area != attr['area']:
+                    time_cost *= 1.5
             
-            if current_area != "ENT" and current_area != attr['area']:
-                time_cost *= 1.5  # 異なるエリア間の移動ペナルティ
-                
-            if time_cost > 2:
+            # 移動の記録
+            if time_cost >= 2:
                 timeline.append({
-                    "name": f"🚶 移動 ({AREA_INFO[current_area]['name']} → {AREA_INFO[attr['area']]['name']})", 
-                    "start": current_t, "wait": 0, "dur": int(time_cost), "type": "Travel", "area": "NA"
+                    "name": f"移動 ({AREA_INFO[current_area]['name']} → {AREA_INFO[attr['area']]['name']})", 
+                    "arrive": current_t, "start": current_t, "end": current_t + int(time_cost),
+                    "wait": 0, "dur": int(time_cost), "type": "Travel", "area": "NA"
                 })
                 current_t += int(time_cost)
             
-            # 2. 自動休憩挿入 (滞在が長時間になる場合、最も待ち時間が長い昼時 11:30~13:30 に休憩)
-            if auto_rest and not has_rested and (current_t >= 11*60+30):
-                rest_dur = 60
-                timeline.append({"name": "🍽️ ダイニング休憩 (ランチ/ディナー)", "start": current_t, "wait": 0, "dur": rest_dur, "type": "Rest", "area": attr['area']})
-                current_t += rest_dur
-                has_rested = True
+            # 2. 自動休憩 (11:30~13:30 または 17:30~19:30)
+            if auto_rest and not has_rested:
+                if (690 <= current_t <= 810) or (1050 <= current_t <= 1170):
+                    rest_dur = 60
+                    timeline.append({
+                        "name": "ダイニング休憩", 
+                        "arrive": current_t, "start": current_t, "end": current_t + rest_dur,
+                        "wait": 0, "dur": rest_dur, "type": "Rest", "area": attr['area']
+                    })
+                    current_t += rest_dur
+                    has_rested = True
 
-            # 3. FS スタンバイパス / DPAの厳格処理
-            w = 0
-            if attr['area'] == "FS":
-                if name in dpa_list:
-                    w = 10 # FS DPAは優先案内
-                elif name in fs_passes:
-                    pass_start = fs_passes[name]
-                    if current_t < pass_start:
-                        idle = pass_start - current_t
-                        timeline.append({"name": "⏱️ 指定時刻まで待機", "start": current_t, "wait": 0, "dur": int(idle), "type": "Wait", "area": attr['area']})
-                        current_t += idle
-                    elif current_t > pass_start + 60:
-                        current_t += 5000 # 指定時間を過ぎた場合の重篤なペナルティ
-                    w = 20 # FS スタンバイパスの目安待ち時間
-                else:
-                    current_t += 5000 # パスなしでFSに乗ろうとしたペナルティ(解なし)
-            else:
-                w = 10 if name in dpa_list else self.env.get_wait_curve(name, current_t)
+            # 3. 待ち時間算出 (DPA vs 通常)
+            wait = 10 if name in dpa_list else self.env.get_wait_curve(name, current_t)
             
-            # 4. 待ち時間と体験
-            timeline.append({"name": name, "start": int(current_t), "wait": w, "dur": attr['dur'], "type": "Ride", "area": attr['area']})
-            current_t += w + attr['dur']
+            arrive_t = int(current_t)
+            start_t = arrive_t + wait
+            end_t = start_t + attr['dur']
             
+            # 22時門限を過ぎたら即座にペナルティ（ルート棄却）
+            if end_t > PARK_CLOSING_MINUTES:
+                return float('inf'), end_t, timeline
+
+            # 4. 体験の記録
+            timeline.append({
+                "name": name, "arrive": arrive_t, "start": start_t, "end": end_t, 
+                "wait": wait, "dur": attr['dur'], "type": "Ride", "area": attr['area']
+            })
+            
+            current_t = end_t
             current_pos = attr['pos']
             current_area = attr['area']
-            total_wait += w
-            
-        # 5. 閉園時間 (22:00) 厳守のペナルティ
-        if current_t > PARK_CLOSING_MINUTES:
-            total_wait += (current_t - PARK_CLOSING_MINUTES) * 1000 # 1分超過ごとに極大ペナルティ
+            total_wait += wait
 
         return total_wait, current_t, timeline
 
-    def anneal(self, selected, dpa_list, fs_passes, auto_rest, start_time):
+    def anneal(self, selected, dpa_list, auto_rest, start_time):
         best_route = list(selected)
         random.shuffle(best_route)
-        _, best_end, _ = self.calc_route_cost(best_route, start_time, dpa_list, fs_passes, auto_rest)
-        
-        # 初期状態のスコア関数は「総待ち時間 + 終了時刻」の最小化
-        best_score, _, _ = self.calc_route_cost(best_route, start_time, dpa_list, fs_passes, auto_rest)
+        best_score, best_end, _ = self.calc_route_cost(best_route, start_time, dpa_list, auto_rest)
         
         temp = 1000.0
-        cooling_rate = 0.98
+        cooling_rate = 0.95
         
-        for _ in range(500): # 反復回数
+        for _ in range(1000):
             if temp < 1.0: break
             new_route = best_route[:]
             i, j = random.sample(range(len(new_route)), 2)
             new_route[i], new_route[j] = new_route[j], new_route[i]
             
-            new_score, _, _ = self.calc_route_cost(new_route, start_time, dpa_list, fs_passes, auto_rest)
+            new_score, _, _ = self.calc_route_cost(new_route, start_time, dpa_list, auto_rest)
             
-            if new_score < best_score or random.random() < math.exp((best_score - new_score) / temp):
+            # inf(門限オーバー)を回避しつつ最適化
+            if new_score < best_score or (new_score != float('inf') and random.random() < math.exp((best_score - new_score) / temp)):
                 best_score = new_score
                 best_route = new_route
             temp *= cooling_rate
@@ -191,203 +185,177 @@ class OptimizationCore:
         return best_route
 
 # ==========================================
-# 4. UI: 高級日本のWebデザイン (Glassmorphism)
+# 4. 公式アプリ風 UI/UX
 # ==========================================
 def main():
-    st.set_page_config(page_title="TDS Tactical Aegis", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="TDS コンシェルジュ", layout="wide")
     
-    # 高級感のあるネイビーと真鍮色のCSS
+    # 清潔感のある白基調・柔らかいフォントのCSS
     st.markdown("""
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=M+PLUS+1p:wght@400;700&family=Rounded+Mplus+1c:wght@400;700&display=swap');
+        
         .stApp {
-            background: linear-gradient(135deg, #001529 0%, #002244 100%);
-            color: #E8E2D2;
-            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            background-color: #F8F9FA;
+            color: #333333;
+            font-family: 'M PLUS 1p', 'Rounded Mplus 1c', sans-serif;
         }
-        .glass-card {
-            background: rgba(255, 255, 255, 0.03);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(184, 134, 11, 0.3); /* 真鍮色ボーダー */
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-            margin-bottom: 20px;
-            transition: all 0.3s ease;
+        .header-title {
+            color: #1F3C88;
+            font-weight: 700;
+            margin-bottom: 0px;
         }
-        .glass-card:hover { 
-            border: 1px solid rgba(184, 134, 11, 0.8); 
-            box-shadow: 0 8px 32px rgba(184, 134, 11, 0.2); 
+        .header-subtitle {
+            color: #666666;
+            font-size: 1em;
+            margin-bottom: 30px;
+        }
+        .app-card {
+            background: #FFFFFF;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            margin-bottom: 16px;
+            border-left: 6px solid #1F3C88;
+            transition: 0.2s;
+        }
+        .app-card:hover {
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+        }
+        .time-text {
+            color: #1F3C88;
+            font-weight: 700;
+            font-size: 1.2em;
+            margin-right: 15px;
         }
         .area-badge {
-            color: #001529; padding: 4px 10px; border-radius: 4px; font-size: 0.75em; font-weight: 600; margin-right: 12px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            display: inline-block;
+            color: #FFFFFF;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75em;
+            font-weight: 700;
+            margin-right: 12px;
+            margin-bottom: 8px;
         }
-        .metric-title { font-size: 0.9em; color: #A0AAB5; margin-bottom: 4px;}
-        .metric-value { font-size: 2.2em; font-weight: bold; color: #B8860B; margin: 0;}
-        .stButton>button { 
-            border-radius: 8px; 
-            background: linear-gradient(135deg, #B8860B 0%, #8B6508 100%); 
-            color: #fff;
-            border: none; 
-            font-weight: bold; 
-            height: 56px;
-            letter-spacing: 2px;
+        .wait-time {
+            color: #D32F2F;
+            font-weight: bold;
+        }
+        .stButton>button {
+            border-radius: 24px;
+            background-color: #1F3C88;
+            color: #FFFFFF;
+            border: none;
+            font-weight: 700;
+            height: 50px;
             transition: 0.3s;
         }
         .stButton>button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(184, 134, 11, 0.4);
+            background-color: #152B65;
+            color: #FFFFFF;
         }
-        h1, h2, h3 { color: #B8860B; font-weight: 300; letter-spacing: 1px;}
         </style>
     """, unsafe_allow_html=True)
 
-    st.markdown("<h1>⚜️ TDS Tactical Aegis</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#A0AAB5; font-size:1.1em; letter-spacing:1px;'>東京ディズニーシー 究極の戦略シミュレーター</p>", unsafe_allow_html=True)
+    st.markdown("<h1 class='header-title'>TDS コンシェルジュ</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='header-subtitle'>あなただけの最適なパーク体験プランをご提案します</p>", unsafe_allow_html=True)
 
     # --- サイドバー (条件設定) ---
     with st.sidebar:
-        st.markdown("<h2 style='font-size:1.2em;'>⚙️ 作戦条件 (CONDITIONS)</h2>", unsafe_allow_html=True)
-        
-        # 時間・日付管理の徹底改修
+        st.markdown("### 📅 本日の設定")
         col1, col2 = st.columns(2)
         target_date = col1.date_input("入園予定日", date.today())
-        entry_time = col2.time_input("入園時刻", datetime.strptime("08:15", "%H:%M").time())
+        entry_time = col2.time_input("入園時刻", datetime.strptime("08:30", "%H:%M").time())
         
-        is_holiday = st.checkbox("祝日・長期休暇（混雑補正）", value=False)
+        is_holiday = st.checkbox("祝日・長期休暇", value=False)
         rain_prob = st.slider("降水確率 (%)", 0, 100, 10)
-        auto_rest = st.toggle("🍽️ レストラン休憩を自動挿入", value=True)
+        auto_rest = st.toggle("🍽️ 食事休憩を自動で組み込む", value=True)
 
         st.divider()
-        st.markdown("<h2 style='font-size:1.2em;'>📍 攻略目標 (TARGETS)</h2>", unsafe_allow_html=True)
+        st.markdown("### 📍 目的地を選択")
         
         selected_attrs = []
-        fs_passes = {}
+        dpa_list = []
         grouped = {}
         for name, data in MASTER_DB.items():
             grouped.setdefault(data['area'], []).append(name)
             
         for area_code, attrs in grouped.items():
             if area_code == "ENT": continue
-            area_color = AREA_INFO[area_code]["color"]
-            with st.expander(f"{AREA_INFO[area_code]['name']} ({len(attrs)})"):
+            with st.expander(f"{AREA_INFO[area_code]['name']}"):
                 for attr in attrs:
                     if st.checkbox(attr, key=f"sel_{attr}"):
                         selected_attrs.append(attr)
-                        # FSエリアの場合、SP時間またはDPA指定を必須化
-                        if area_code == "FS":
-                            is_dpa = False
-                            if MASTER_DB[attr]['dpa']:
-                                is_dpa = st.checkbox(f"┗ 💎 DPA(有料)を購入", key=f"fs_dpa_{attr}")
-                            
-                            if not is_dpa:
-                                pass_time = st.time_input(f"┗ 🎫 SP(無料) 取得時刻", datetime.strptime("12:00", "%H:%M").time(), key=f"fs_sp_{attr}")
-                                fs_passes[attr] = pass_time.hour * 60 + pass_time.minute
-
-        st.divider()
-        st.markdown("<h2 style='font-size:1.2em;'>💎 有料戦略 (DPA)</h2>", unsafe_allow_html=True)
-        dpa_list = []
-        for s in selected_attrs:
-            if MASTER_DB[s]['dpa'] and MASTER_DB[s]['area'] != "FS": # FSのDPAは上で処理
-                if st.checkbox(f"DPA利用: {s}", key=f"dpa_{s}"):
-                    dpa_list.append(s)
-            elif MASTER_DB[s]['area'] == "FS" and st.session_state.get(f"fs_dpa_{s}"):
-                dpa_list.append(s)
+                        # DPAの選択 (FS含む)
+                        if MASTER_DB[attr].get('dpa'):
+                            if st.checkbox("┗ 💎 DPAを利用する", key=f"dpa_{attr}"):
+                                dpa_list.append(attr)
 
     if not selected_attrs:
-        st.info("👈 左のコンシェルジュメニューから、体験したいアトラクションを選択してください。")
+        st.info("👈 左のメニューから、今日体験したいアトラクションを選んでください。")
         return
 
-    # 計算用時刻のセットアップ (分換算)
     start_offset = entry_time.hour * 60 + entry_time.minute
 
     # --- 実行 ---
     env = EnvironmentAI(target_date, rain_prob, is_holiday)
     core = OptimizationCore(env)
     
-    if st.button("⚜️ 究極の戦略を生成 (AI最適化)", use_container_width=True):
-        with st.spinner("数学的アルゴリズムに基づく最適経路を解析中..."):
-            best_route = core.anneal(selected_attrs, dpa_list, fs_passes, auto_rest, start_offset)
-            total_w, end_t, timeline = core.calc_route_cost(best_route, start_offset, dpa_list, fs_passes, auto_rest)
+    if st.button("✨ プランを作成する", use_container_width=True):
+        with st.spinner("最適なルートを計算しています..."):
+            best_route = core.anneal(selected_attrs, dpa_list, auto_rest, start_offset)
+            total_w, end_t, timeline = core.calc_route_cost(best_route, start_offset, dpa_list, auto_rest)
 
-        # 閉園時間超過チェック
-        if end_t > PARK_CLOSING_MINUTES:
-            st.error(f"⚠️ 警告: 選択された施設をすべて体験することは不可能です（完了予定時刻が22:00を超過します）。施設数を減らすか、DPAの活用を検討してください。")
+        if end_t > PARK_CLOSING_MINUTES or total_w == float('inf'):
+            st.error("⚠️ 22:00までにすべての施設を回りきれません。選択数を減らすか、DPAのご利用をご検討ください。")
+            return
         
-        # 1. 概要メトリクス
-        st.markdown("<h3 style='margin-top:20px;'>戦略概要 (TACTICAL SUMMARY)</h3>", unsafe_allow_html=True)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.markdown(f"<div class='glass-card'><div class='metric-title'>予測総待ち時間</div><div class='metric-value'>{total_w} <span style='font-size:0.5em;'>min</span></div></div>", unsafe_allow_html=True)
-        
-        end_time_str = f"{end_t // 60:02d}:{end_t % 60:02d}" if end_t <= 24*60 else "OVER"
-        c2.markdown(f"<div class='glass-card'><div class='metric-title'>全工程完了時刻</div><div class='metric-value'>{end_time_str}</div></div>", unsafe_allow_html=True)
-        c3.markdown(f"<div class='glass-card'><div class='metric-title'>体験施設数</div><div class='metric-value'>{len(selected_attrs)} <span style='font-size:0.5em;'>施設</span></div></div>", unsafe_allow_html=True)
-        c4.markdown(f"<div class='glass-card'><div class='metric-title'>DPA必要予算</div><div class='metric-value'>¥{len(dpa_list)*2000:,}</div></div>", unsafe_allow_html=True)
+        # 概要
+        col1, col2, col3 = st.columns(3)
+        end_time_str = f"{end_t // 60:02d}:{end_t % 60:02d}"
+        col1.metric("体験施設数", f"{len(selected_attrs)} 個")
+        col2.metric("総待ち時間（目安）", f"{total_w} 分")
+        col3.metric("全日程終了予定", end_time_str)
 
-        # 2. メインダッシュボード（タブ機能）
-        t_tab, g_tab, m_tab = st.tabs(["📜 行動工程表 (TIMELINE)", "📊 進行チャート (GANTT)", "🗺️ 展開戦術マップ (TACTICAL MAP)"])
+        st.divider()
+        t_tab, m_tab = st.tabs(["📋 本日のプラン", "🗺️ マップで確認"])
         
-        share_text = f"⚜️ {target_date.strftime('%Y/%m/%d')} TDS戦略プロット\n"
-
         with t_tab:
             for item in timeline:
-                h, m = item['start'] // 60, item['start'] % 60
-                t_str = f"{h:02d}:{m:02d}"
+                # 時間フォーマット
+                a_h, a_m = item['arrive'] // 60, item['arrive'] % 60
+                s_h, s_m = item['start'] // 60, item['start'] % 60
+                e_h, e_m = item['end'] // 60, item['end'] % 60
                 
                 badge = ""
+                border_color = "#AAAAAA"
                 if item['area'] in AREA_INFO and item['area'] != "NA":
                     bg_color = AREA_INFO[item['area']]['color']
-                    badge = f"<span class='area-badge' style='background:{bg_color};'>{AREA_INFO[item['area']]['name']}</span>"
+                    border_color = bg_color
+                    badge = f"<span class='area-badge' style='background:{bg_color};'>{AREA_INFO[item['area']]['name']}</span><br>"
                 
-                icon = "✨"
-                if item['type'] == 'Travel': icon, badge = "🚶", ""
+                icon = "🎪"
+                if item['type'] == 'Travel': icon = "🚶"
                 elif item['type'] == 'Rest': icon = "🍽️"
-                elif item['type'] == 'Wait': icon = "⏱️"
                 
-                if item['type'] == 'Ride':
-                    share_text += f"[{t_str}] {item['name']} (待{item['wait']}分)\n"
+                wait_text = f"<span class='wait-time'>待ち時間: {item['wait']}分</span> | " if item['wait'] > 0 else ""
                 
                 st.markdown(f"""
-                <div class='glass-card' style='padding: 16px 24px; margin-bottom: 12px;'>
-                    <span style='color:#B8860B; font-family:monospace; font-size:1.3em; margin-right: 15px;'>{t_str}</span> 
-                    {badge} <span style='font-size:1.1em;'>{icon} <b>{item['name']}</b></span>
-                    <br><span style='color:#A0AAB5; font-size:0.85em; margin-left:75px;'>所要時間: {item['dur']}分 {f'｜ 推定待ち時間: <b>{item["wait"]}分</b>' if item['wait'] > 0 else ''}</span>
+                <div class='app-card' style='border-left-color: {border_color};'>
+                    {badge}
+                    <span class='time-text'>{a_h:02d}:{a_m:02d}</span>
+                    <span style='font-size:1.1em; font-weight:700;'>{icon} {item['name']}</span>
+                    <div style='color:#666666; font-size:0.9em; margin-top:8px; padding-left:70px;'>
+                        {wait_text}体験開始: {s_h:02d}:{s_m:02d} ～ 終了: {e_h:02d}:{e_m:02d} ({item['dur']}分)
+                    </div>
                 </div>
                 """, unsafe_allow_html=True)
-                
-            st.markdown("<h4 style='color:#B8860B; margin-top:20px;'>📱 共有用テキスト</h4>", unsafe_allow_html=True)
-            st.code(share_text, language="text")
-
-        with g_tab:
-            gantt_data = []
-            base_dt = datetime(2023, 1, 1) # ガント描画用ダミー日付
-            for item in timeline:
-                s_dt = base_dt + timedelta(minutes=item['start'])
-                if item['type'] == 'Ride':
-                    w_dt = s_dt + timedelta(minutes=item['wait'])
-                    e_dt = w_dt + timedelta(minutes=item['dur'])
-                    if item['wait'] > 0:
-                        gantt_data.append(dict(Task="行動推移", Start=s_dt, Finish=w_dt, Action="待機", Name=item['name']))
-                    gantt_data.append(dict(Task="行動推移", Start=w_dt, Finish=e_dt, Action="体験", Name=item['name']))
-                else:
-                    e_dt = s_dt + timedelta(minutes=item['dur'])
-                    action = "移動" if item['type'] == 'Travel' else "休憩・待機"
-                    gantt_data.append(dict(Task="行動推移", Start=s_dt, Finish=e_dt, Action=action, Name=item['name']))
-                    
-            if gantt_data:
-                df_gantt = pd.DataFrame(gantt_data)
-                fig_gantt = px.timeline(df_gantt, x_start="Start", x_end="Finish", y="Task", color="Action", text="Name",
-                                       color_discrete_map={"待機": "#8B2252", "体験": "#B8860B", "移動": "#1C3953", "休憩・待機": "#4F94CD"})
-                fig_gantt.update_yaxes(autorange="reversed", visible=False)
-                fig_gantt.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color='#E8E2D2',
-                    xaxis_tickformat='%H:%M', height=300, margin=dict(l=0, r=0, t=30, b=0)
-                )
-                st.plotly_chart(fig_gantt, use_container_width=True)
 
         with m_tab:
-            map_pts = [{"x": 0, "y": 0, "name": "エントランス", "area": "エントランス", "color": "#ffffff"}]
+            st.image("https://upload.wikimedia.org/wikipedia/commons/a/a2/Tokyo_DisneySea_overview.jpg", caption="パーク全体マップ（参考）")
+            
+            map_pts = [{"x": 0, "y": 0, "name": "エントランス", "area": "エントランス", "color": "#AAAAAA"}]
             for i in timeline:
                 if i['type'] == 'Ride' and i['name'] in MASTER_DB:
                     data = MASTER_DB[i['name']]
@@ -398,14 +366,13 @@ def main():
             fig_map = px.scatter(df_map, x='x', y='y', text='name', color='area',
                                 color_discrete_map={row['area']: row['color'] for _, row in df_map.iterrows()})
             
-            # 移動線(ルート)を描画
             fig_map.add_trace(go.Scatter(x=df_map['x'], y=df_map['y'], mode='lines', 
-                                         line=dict(color='rgba(184, 134, 11, 0.6)', width=3, dash='dot'), showlegend=False))
-            fig_map.update_traces(marker=dict(size=18, line=dict(width=2, color='#001529')), textposition='top center', textfont=dict(color='#E8E2D2', size=11))
+                                         line=dict(color='#1F3C88', width=2, dash='dot'), showlegend=False))
+            fig_map.update_traces(marker=dict(size=14, line=dict(width=1, color='#FFFFFF')), textposition='top center')
             fig_map.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,21,41,0.5)', font_color='#E8E2D2',
+                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='#F8F9FA', font_color='#333333',
                 xaxis=dict(visible=False), yaxis=dict(visible=False), 
-                title=dict(text="戦術展開ルートマップ", font=dict(color="#B8860B")),
+                title=dict(text="本日の移動ルート", font=dict(color="#1F3C88", size=18, family="M PLUS 1p")),
                 height=600, margin=dict(l=0, r=0, t=50, b=0)
             )
             st.plotly_chart(fig_map, use_container_width=True)
